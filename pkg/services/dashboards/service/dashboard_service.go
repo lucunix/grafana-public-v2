@@ -1785,6 +1785,33 @@ func (dr *DashboardServiceImpl) getDashboardThroughK8s(ctx context.Context, quer
 	return dr.UnstructuredToLegacyDashboard(ctx, out, query.OrgID)
 }
 
+// GetDashboardUnstructured is like getDashboardThroughK8s but returns the raw
+// resource as-is instead of running it through UnstructuredToLegacyDashboard,
+// so callers that need to distinguish v1 from v2 (e.g. public dashboards) can
+// see the real stored apiVersion/spec rather than the always-legacy-shaped
+// conversion.
+func (dr *DashboardServiceImpl) GetDashboardUnstructured(ctx context.Context, query *dashboards.GetDashboardQuery) (*unstructured.Unstructured, error) {
+	if query.UID == "" {
+		result, err := dr.GetDashboardUIDByID(ctx, &dashboards.GetDashboardRefByIDQuery{
+			ID: query.ID,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		query.UID = result.UID
+	}
+
+	out, err := dr.k8sclient.GetWithPreferredAPIVersion(ctx, query.UID, query.OrgID, v1.GetOptions{}, query.K8sGetAPIVersion, "")
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	} else if err != nil || out == nil {
+		return nil, dashboards.ErrDashboardNotFound
+	}
+
+	return out, nil
+}
+
 func (dr *DashboardServiceImpl) saveProvisionedDashboardThroughK8s(ctx context.Context, cmd *dashboards.SaveDashboardCommand, provisioning *dashboards.DashboardProvisioning, unprovision bool) (*dashboards.Dashboard, error) {
 	// default to 1 if not set
 	if cmd.OrgID == 0 {

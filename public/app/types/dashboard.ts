@@ -54,6 +54,9 @@ export interface DashboardMeta {
   isEmbedded?: boolean;
   isNew?: boolean;
   version?: number;
+  // Schema version the dashboard was stored/served at (e.g. v1, v2beta1). Only
+  // populated on some response paths (currently: public dashboards).
+  apiVersion?: string;
 
   // Dashboard template edit flow. Set when a dashboard scene was hydrated from an DashboardTemplate
   // via DashboardRoutes.Template with editTemplate=true.

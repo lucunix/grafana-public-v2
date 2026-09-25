@@ -482,7 +482,19 @@ func sanitizeDataV2(data *simplejson.Json) {
 // isDashboardV2 returns true for dashboard API versions v2 and above.
 // v0/v1 (including empty, which implies legacy v1) use the panels schema.
 func isDashboardV2(dash *dashboards.Dashboard) bool {
-	v := dash.APIVersion
+	return isV2APIVersion(dash.APIVersion)
+}
+
+// isV2APIVersion returns true for API versions v2 and above. Accepts either a
+// bare version ("v2beta1") or a full "group/version" string
+// ("dashboard.grafana.app/v2beta1") -- dash.APIVersion isn't populated
+// consistently across all backend code paths, so this only looks at whatever
+// comes after the last '/', if any.
+func isV2APIVersion(apiVersion string) bool {
+	v := apiVersion
+	if idx := strings.LastIndex(v, "/"); idx != -1 {
+		v = v[idx+1:]
+	}
 	return v != "" && !strings.HasPrefix(v, "v0") && !strings.HasPrefix(v, "v1")
 }
 

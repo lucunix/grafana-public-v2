@@ -12,7 +12,13 @@ export function initGrafanaLive() {
     appUrl: `${window.location.origin}${config.appSubUrl}`,
     namespace: config.liveNamespaced ? config.namespace : `${contextSrv.user.orgId}`,
     orgRole: contextSrv.user.orgRole,
-    liveEnabled: config.liveEnabled,
+    // Public dashboard viewers have no session to authenticate a live connection
+    // with -- connecting is guaranteed to fail auth and just spams /api/live/ws
+    // and /api/login/ping (see CentrifugeService's onError workaround for
+    // grafana/grafana#72792). Same convention as AlertStatesDataLayer /
+    // DashboardAnnotationsDataLayer, which skip their own privileged calls the
+    // same way.
+    liveEnabled: config.liveEnabled && !config.publicDashboardAccessToken,
     dataStreamSubscriberReadiness: liveTimer.ok.asObservable(),
     grafanaAuthToken: loadUrlToken(),
   };
