@@ -3,6 +3,7 @@ import { config, getBackendSrv, isFetchError, locationService } from '@grafana/r
 import { type Spec as DashboardV2Spec } from '@grafana/schema/apis/dashboard.grafana.app/v2';
 import { backendSrv } from 'app/core/services/backend_srv';
 import impressionSrv from 'app/core/services/impression_srv';
+import { isRecord } from 'app/core/utils/isRecord';
 import { getDashboardScenePageStateManager } from 'app/features/dashboard-scene/pages/DashboardScenePageStateManager';
 import { getDatasourceSrv } from 'app/features/plugins/datasource_srv';
 import { type DashboardDataDTO, type DashboardDTO } from 'app/types/dashboard';
@@ -25,6 +26,18 @@ export const SCRIPTED_DASHBOARDS_DISABLED_MESSAGE_ID = 'scripted-dashboards-disa
 // Accept any object and let the rest of the loading pipeline deal with the details.
 function isDashboardData(value: unknown): value is DashboardDataDTO {
   return typeof value === 'object' && value !== null;
+}
+
+// Mirrors isDashboardV2() in pkg/services/publicdashboards/internal/service/query.go.
+// apiVersion isn't guaranteed to be a bare version like "v2beta1" -- some backend
+// code paths populate it as a full "group/version" string instead, so this checks
+// the suffix after the last '/' rather than doing an exact/enum match.
+function isStoredVersionV2(apiVersion: string | undefined): boolean {
+  if (!apiVersion) {
+    return false;
+  }
+  const version = apiVersion.includes('/') ? apiVersion.slice(apiVersion.lastIndexOf('/') + 1) : apiVersion;
+  return version !== '' && !version.startsWith('v0') && !version.startsWith('v1');
 }
 
 interface DashboardLoaderSrvLike<T> {
@@ -162,6 +175,13 @@ export class DashboardLoaderSrv extends DashboardLoaderSrvBase<DashboardDTO> {
       promise = getDashboardSnapshotSrv().getSnapshot(slug);
     } else if (type === 'public' && uid) {
       promise = backendSrv.getPublicDashboardByUid(uid).then((result) => {
+        // Public dashboards don't go through the k8s resource /dto subresource
+        // (that's where the uid branch below gets its version-mismatch signal
+        // from), so the version check has to happen here instead, against the
+        // apiVersion the public dashboards backend now reports in meta.
+        if (isStoredVersionV2(result.meta?.apiVersion)) {
+          throw new DashboardVersionError(result.meta?.apiVersion, 'Public dashboard is V2 format');
+        }
         return result;
       });
     } else if (uid) {
@@ -227,6 +247,49 @@ export class DashboardLoaderSrvV2 extends DashboardLoaderSrvBase<DashboardWithAc
       promise = this.loadScriptedDashboard(slug).then((r) => ResponseTransformers.ensureV2Response(r));
     } else if (type === 'public' && uid) {
       promise = backendSrv.getPublicDashboardByUid(uid).then((result) => {
+        // ensureV2Response() only recognizes a v2 payload when the *top-level*
+        // object has kind/apiVersion (the DashboardWithAccessInfo/Dashboard
+        // resource shape). A public dashboard response nests the real payload
+        // one level down, in `result.dashboard`, so a v2 `result.dashboard`
+        // still looks like a plain, kind-less object to ensureV2Response and
+        // gets misread as a v1 DashboardDataDTO -- silently producing an
+        // empty/broken spec instead of an error, since a v1-shaped object and
+        // an unrecognized object look identical to that function.
+        //
+        // If the nested payload already carries its own kind/apiVersion,
+        // construct the DashboardWithAccessInfo<DashboardV2Spec> shape
+        // directly from it instead of routing it through the v1->v2 upward
+        // conversion pipeline.
+        const rawDashboard = result.dashboard;
+        if (
+          isRecord(rawDashboard) &&
+          rawDashboard.kind === 'Dashboard' &&
+          typeof rawDashboard.apiVersion === 'string' &&
+          isStoredVersionV2(rawDashboard.apiVersion) &&
+          isRecord(rawDashboard.metadata) &&
+          isRecord(rawDashboard.spec)
+        ) {
+          const dashboardWithAccessInfo: DashboardWithAccessInfo<DashboardV2Spec> = {
+            kind: 'DashboardWithAccessInfo',
+            apiVersion: rawDashboard.apiVersion,
+            metadata: rawDashboard.metadata as unknown as DashboardWithAccessInfo<DashboardV2Spec>['metadata'],
+            spec: rawDashboard.spec as unknown as DashboardV2Spec,
+            status: rawDashboard.status as DashboardWithAccessInfo<DashboardV2Spec>['status'],
+            access: {
+              url: result.meta?.url,
+              slug: result.meta?.slug,
+              canSave: result.meta?.canSave,
+              canEdit: result.meta?.canEdit,
+              canDelete: result.meta?.canDelete,
+              canShare: result.meta?.canShare,
+              canStar: result.meta?.canStar,
+              canAdmin: result.meta?.canAdmin,
+              annotationsPermissions: result.meta?.annotationsPermissions,
+              isPublic: result.meta?.publicDashboardEnabled,
+            },
+          };
+          return dashboardWithAccessInfo;
+        }
         return ResponseTransformers.ensureV2Response(result);
       });
     } else if (uid) {

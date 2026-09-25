@@ -26,6 +26,13 @@ type DashboardService interface {
 	// To fetch a dashboard under root by title should set the folder UID to point to an empty string
 	// eg. new("")
 	GetDashboard(ctx context.Context, query *GetDashboardQuery) (*Dashboard, error)
+	// GetDashboardUnstructured fetches a dashboard's raw unified-storage resource,
+	// preserving whatever schema version (v1 or v2) it's actually stored at.
+	// Unlike GetDashboard, this does NOT run it through UnstructuredToLegacyDashboard,
+	// so v2-only data (e.g. Dynamic Dashboards layout) survives intact. Added for
+	// public dashboards, which need the real stored shape rather than the
+	// legacy-flattened one GetDashboard always returns.
+	GetDashboardUnstructured(ctx context.Context, query *GetDashboardQuery) (*unstructured.Unstructured, error)
 	GetDashboards(ctx context.Context, query *GetDashboardsQuery) ([]*Dashboard, error) // use sparely only if you truly need dashboard.Data
 	GetDashboardTags(ctx context.Context, query *GetDashboardTagsQuery) ([]*DashboardTagCloudItem, error)
 	GetDashboardUIDByID(ctx context.Context, query *GetDashboardRefByIDQuery) (*DashboardRef, error)

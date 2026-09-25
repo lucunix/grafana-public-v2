@@ -277,6 +277,36 @@ func (_m *FakeDashboardService) GetDashboard(ctx context.Context, query *GetDash
 	return r0, r1
 }
 
+// GetDashboardUnstructured provides a mock function with given fields: ctx, query
+func (_m *FakeDashboardService) GetDashboardUnstructured(ctx context.Context, query *GetDashboardQuery) (*unstructured.Unstructured, error) {
+	ret := _m.Called(ctx, query)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDashboardUnstructured")
+	}
+
+	var r0 *unstructured.Unstructured
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *GetDashboardQuery) (*unstructured.Unstructured, error)); ok {
+		return rf(ctx, query)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *GetDashboardQuery) *unstructured.Unstructured); ok {
+		r0 = rf(ctx, query)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*unstructured.Unstructured)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *GetDashboardQuery) error); ok {
+		r1 = rf(ctx, query)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // GetDashboardTags provides a mock function with given fields: ctx, query
 func (_m *FakeDashboardService) GetDashboardTags(ctx context.Context, query *GetDashboardTagsQuery) ([]*DashboardTagCloudItem, error) {
 	ret := _m.Called(ctx, query)

@@ -9,11 +9,13 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/gtime"
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/apimachinery/identity"
+	"github.com/grafana/grafana/pkg/components/simplejson"
 	queryV0 "github.com/grafana/grafana/pkg/apis/datasource/v0alpha1"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/metrics"
@@ -95,6 +97,49 @@ func (pd *PublicDashboardServiceImpl) GetPublicDashboardForView(ctx context.Cont
 	}
 
 	metrics.MFolderIDsServiceCount.WithLabelValues(metrics.PublicDashboards).Inc()
+
+	// dash here always comes back through GetDashboard -> getDashboardThroughK8s ->
+	// UnstructuredToLegacyDashboard, which unconditionally flattens v2 dashboards down
+	// to the legacy v1 shape. That means dash.APIVersion/dash.Data can never actually
+	// reflect a real v2 (Dynamic Dashboards) dashboard here, regardless of what's really
+	// stored. Fetch the raw unstructured resource separately -- bypassing that
+	// conversion -- to find out the real stored version and, if it's v2, get the real
+	// spec (with its TabsLayout/AutoGridLayout/etc, which the legacy conversion drops).
+	apiVersion := dash.APIVersion
+	dashboardData := dash.Data
+	// Same as FindDashboard above: no signed-in user for public dashboards, so this
+	// needs Grafana's own service identity to be allowed to query the dashboard.
+	raw, rawErr := identity.WithServiceIdentityFn(ctx, pubdash.OrgId, func(ctx context.Context) (*unstructured.Unstructured, error) {
+		return pd.dashboardService.GetDashboardUnstructured(ctx, &dashboards.GetDashboardQuery{
+			UID:              pubdash.DashboardUid,
+			OrgID:            pubdash.OrgId,
+			K8sGetAPIVersion: "v2beta1",
+		})
+	})
+	if rawErr == nil && raw != nil && isV2APIVersion(raw.GetAPIVersion()) {
+		apiVersion = raw.GetAPIVersion()
+
+		spec := simplejson.NewFromAny(raw.Object["spec"])
+		sanitizeDataV2(spec)
+		// Mirrors the timepicker.hidden override in the legacy branch below --
+		// the public dashboard's own time-selection setting must win over
+		// whatever the dashboard author left as the editor default.
+		spec.Get("timeSettings").Set("hideTimepicker", !pubdash.TimeSelectionEnabled)
+
+		wrapped := simplejson.New()
+		wrapped.Set("kind", raw.GetKind())
+		wrapped.Set("apiVersion", raw.GetAPIVersion())
+		wrapped.Set("metadata", raw.Object["metadata"])
+		wrapped.Set("spec", spec.Interface())
+		if status, ok := raw.Object["status"]; ok {
+			wrapped.Set("status", status)
+		}
+		dashboardData = wrapped
+	} else {
+		dash.Data.Get("timepicker").Set("hidden", !pubdash.TimeSelectionEnabled)
+		sanitizeData(dash.Data)
+	}
+
 	meta := dtos.DashboardMeta{
 		Slug:                   dash.Slug,
 		Type:                   dashboards.DashTypeDB,
@@ -110,15 +155,10 @@ func (pd *PublicDashboardServiceImpl) GetPublicDashboardForView(ctx context.Cont
 		FolderId:               dash.FolderID, // nolint:staticcheck
 		FolderUid:              dash.FolderUID,
 		PublicDashboardEnabled: pubdash.IsEnabled,
-	}
-	if isDashboardV2(dash) {
-		sanitizeDataV2(dash.Data)
-	} else {
-		dash.Data.Get("timepicker").Set("hidden", !pubdash.TimeSelectionEnabled)
-		sanitizeData(dash.Data)
+		APIVersion:             apiVersion,
 	}
 
-	return &dtos.DashboardFullWithMeta{Meta: meta, Dashboard: dash.Data}, nil
+	return &dtos.DashboardFullWithMeta{Meta: meta, Dashboard: dashboardData}, nil
 }
 
 // FindByDashboardUid this method would be replaced by another implementation for Enterprise version
