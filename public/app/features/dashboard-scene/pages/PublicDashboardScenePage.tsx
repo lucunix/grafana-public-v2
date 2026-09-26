@@ -64,11 +64,10 @@ export function PublicDashboardScenePage({ route }: Props) {
     );
   }
 
-  // if no time picker render without url sync
-  if (dashboard.state.controls?.state.hideTimeControls) {
-    return <PublicDashboardSceneRenderer model={dashboard} />;
-  }
-
+  // URL sync must stay active even when the time picker is hidden: other scene
+  // objects besides the time range (e.g. TabsLayoutManager) also depend on it
+  // to read/write their state via the URL, and skipping it breaks tab
+  // switching entirely on public dashboards with the time picker disabled.
   return (
     <UrlSyncContextProvider scene={dashboard}>
       <PublicDashboardSceneRenderer model={dashboard} />
